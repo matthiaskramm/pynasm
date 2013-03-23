@@ -1,0 +1,3 @@
+[submodule "nasm"]
+	path = nasm
+	url = git://repo.or.cz/nasm.git
