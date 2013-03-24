@@ -145,6 +145,7 @@ static struct global_state {
 } global_state;
 
 struct ofmt* pynasm_ofmt;
+struct ofmt* dummy_ofmt;
 
 static char* strf(char*format, ...)
 {
@@ -203,24 +204,26 @@ PyObject*forward_getattr(PyObject*self, char *a)
 
 // -----------------------------------------------------------------------------
 
-static void pynasm_error(int severity, const char *fmt, ...)
+void pynasm_error_va(int severity, const char *fmt, va_list ap)
 {
-    static char buf[1024];
     int l;
-    va_list arglist;
+    static char buf[1024];
     if(severity < -1000)
         return;
-    va_start(arglist, fmt);
-    vsnprintf(buf, sizeof(buf)-1, fmt, arglist);
-    va_end(arglist);
+    vsnprintf(buf, sizeof(buf)-1, fmt, ap);
     l = strlen(buf);
     while(l && buf[l-1]=='\n') {
 	buf[l-1] = 0;
 	l--;
     }
-    //printf("(pynasm) %s\n", buf);
-    //fflush(stdout);
     global_state.last_error = buf;
+}
+static void pynasm_error(int severity, const char *fmt, ...)
+{
+    va_list arglist;
+    va_start(arglist, fmt);
+    pynasm_error_va(severity, fmt, arglist);
+    va_end(arglist);
 }
 
 static void code_add_data(CodeObject* self, const void*data, uint64_t length);
@@ -315,7 +318,7 @@ void code_add_ret(CodeObject*self)
     code_add_data(self, &ret, 1);
 }
 
-static int backpatch(struct location*location, insn*ins, const char*label);
+static int backpatch(struct location*location, InstructionObject*instruction);
 
 static int code_emit_instructions(CodeObject*code)
 {
@@ -330,7 +333,7 @@ static int code_emit_instructions(CodeObject*code)
             return -1;
         }
         if(instruction->label) {
-            int ret = backpatch(&code->location, &instruction->ins, instruction->label);
+            int ret = backpatch(&code->location, instruction);
             if(ret<0)
                 return -1;
         }
@@ -518,6 +521,7 @@ static int parse_operands(PyObject*args, struct location* location, insn* ins, c
     int i;
     for(i=0;i<l;i++) {
         PyObject*o = PyTuple_GET_ITEM(args, i);
+        ins->oprs[i].segment = NO_SEG;
         if(o->ob_type == &RegisterClass) {
             RegisterObject*r = (RegisterObject*)o;
             ins->oprs[i].type = r->reg_flags;
@@ -553,9 +557,20 @@ static int parse_operands(PyObject*args, struct location* location, insn* ins, c
                 ins->oprs[i].indexreg = r->index_reg;
                 ins->oprs[i].scale = r->scale;
                 ins->oprs[i].offset = r->offset;
-                ins->oprs[i].segment = NO_SEG;
                 //do this to force the mod bits to be > 0 (add an offset):
                 //ins.oprs[i].eaflags = EAF_BYTEOFFS;
+            } else if(PyLong_Check(e)) {
+                ins->oprs[i].type = MEMORY;
+                ins->oprs[i].basereg = R_none;
+                ins->oprs[i].indexreg = R_none;
+                ins->oprs[i].offset = PyLong_AsLongLong(e);
+#if PY_MAJOR_VERSION < 3
+            } else if(PyInt_Check(e)) {
+                ins->oprs[i].type = MEMORY;
+                ins->oprs[i].basereg = R_none;
+                ins->oprs[i].indexreg = R_none;
+                ins->oprs[i].offset = PyInt_AsLong(e);
+#endif
             } else {
                 PyErr_SetString(PyExc_Exception, "invalid operand in [...]");
                 return -1;
@@ -564,11 +579,11 @@ static int parse_operands(PyObject*args, struct location* location, insn* ins, c
             const char*label = pystring_asstring(o);
             *_label = label;
             ins->forw_ref = true;
-            ins->oprs[i].type = IMMEDIATE|NEAR;
+            /* XXX: nasm accepts neither BITS8 or BITS16 */
+            ins->oprs[i].type = IMMEDIATE|NEAR|BITS32|STRICT;
             ins->oprs[i].basereg = R_none;
             ins->oprs[i].indexreg = R_none;
             ins->oprs[i].offset = 0;
-            ins->oprs[i].eaflags = EAF_REL;
         } else {
             PyErr_SetString(PyExc_Exception, "invalid operand");
             return -1;
@@ -576,8 +591,11 @@ static int parse_operands(PyObject*args, struct location* location, insn* ins, c
     }
 }
 
-static int backpatch(struct location*location, insn*ins, const char*label)
+static int backpatch(struct location*location, InstructionObject*instruction)
 {
+    insn*ins = &instruction->ins;
+    const char*label = instruction->label;
+
     int32_t segment;
     int64_t offset = 0;
     if(!lookup_label((char*)label, &segment, &offset)) {
@@ -589,7 +607,7 @@ static int backpatch(struct location*location, insn*ins, const char*label)
         return -1;
     }
     ins->forw_ref = false;
-    ins->oprs[0].offset = offset - location->offset - 2;
+    ins->oprs[0].offset = offset - location->offset - instruction->size;
     return 0;
 }
 
@@ -615,12 +633,23 @@ static PyObject* opcode_call(PyObject* _self, PyObject* args, PyObject* kwargs)
     if(parse_operands(args, &code->location, &ins, &label)<0)
         return NULL;
 
+#ifdef FAST_FIRST_PASS
     int64_t size = insn_size(code->location.segment, 
                              code->location.offset, 
                              code->num_bits, 
                              code->cpu, 
                              &ins, 
                              pynasm_error);
+#else
+    int64_t size = assemble(code->location.segment,
+                            code->location.offset,
+                            code->num_bits,
+                            code->cpu,
+                            &ins,
+                            dummy_ofmt,
+                            pynasm_error,
+                            &nasmlist);
+#endif
 
     if(global_state.last_error) {
         // pass 1 error
@@ -796,10 +825,16 @@ static PyObject* register_expression_add(PyObject * o1, PyObject * o2)
 #if PY_MAJOR_VERSION < 3
     } else if(PyInt_Check(o2)) {
         r->flags |= HAS_OFFSET;
+        r->base_reg = r1->base_reg;
+        r->index_reg = r1->index_reg;
+        r->scale = r1->scale;
         r->offset += PyInt_AsLong(o2);
 #endif
     } else if(PyLong_Check(o2)) {
         r->flags |= HAS_OFFSET;
+        r->base_reg = r1->base_reg;
+        r->index_reg = r1->index_reg;
+        r->scale = r1->scale;
         r->offset += PyLong_AsLongLong(o2);
     } else {
         Py_DecRef(tmp);
@@ -881,7 +916,12 @@ static PyMethodDef instruction_methods[] =
     {0,0,0,0}
 };
 // -----------------------------------------------------------------------------
-
+//
+#ifdef NEG_CALL_HACK
+static PyNumberMethods code_as_number = {
+    .nb_invert = code_call,
+};
+#endif
 static PyTypeObject CodeClass =
 {
     PYTHON23_HEAD_INIT
@@ -893,8 +933,12 @@ static PyTypeObject CodeClass =
     .tp_getattr = code_getattr,
     .tp_doc = code_doc,
     .tp_methods = code_methods,
+
     /* TODO: it might be nicer to only set this after finish() */
     .tp_call = code_call,
+#ifdef NEG_CALL_HACK
+    .tp_as_number = &code_as_number,
+#endif
 };
 
 static PyTypeObject OpcodeClass =
@@ -937,6 +981,9 @@ static PyNumberMethods register_expression_as_number = {
 static PyTypeObject RegisterExpressionClass =
 {
     PYTHON23_HEAD_INIT
+#if PY_MAJOR_VERSION < 3
+    .tp_flags = Py_TPFLAGS_CHECKTYPES, // for add
+#endif
     .tp_name = "pynasm.RegisterExpression",
     .tp_basicsize = sizeof(RegisterExpressionObject),
     .tp_itemsize = 0,
@@ -1103,8 +1150,10 @@ static void init_nasm()
     memset(&global_state, 0, sizeof(global_state));
     seg_init(); //nasmlib.c
     init_labels();
+    dummy_ofmt = dummy_ofmt_new();
     pynasm_ofmt = dummy_ofmt_new();
     pynasm_ofmt->output = pynasm_output;
+    nasm_set_verror(pynasm_error_va);
 }
 
 PyObject * PyInit_pynasm(void)

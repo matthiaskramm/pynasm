@@ -3,8 +3,6 @@
 
 #include "nasm.h"
 
-struct ofmt dummy_ofmt;
-
 struct ofmt * dummy_ofmt_new();
 
 #endif

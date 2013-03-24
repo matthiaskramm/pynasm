@@ -16,6 +16,7 @@ static void dummy_output(int32_t segto, const void *_data,
                    enum out_type type, uint64_t size, 
                    int32_t segment, int32_t wrt)
 {
+#if 0
     const uint8_t*data = _data;
     uint64_t i;
     for(i=0;i<size;i++) {
@@ -23,6 +24,7 @@ static void dummy_output(int32_t segto, const void *_data,
         if((i&7) == 7 || i == size-1)
             printf("\n");
     }
+#endif
 }
 
 static void dummy_symdef(char *name, int32_t segment, int64_t offset,
