@@ -4,9 +4,9 @@
 
    Copyright (c) 2013 Matthias Kramm <matthias@quiss.org>
  
-   This program is free software; you can redistribute it and/or modify
+   This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 2 of the License, or
+   the Free Software Foundation, either version 3 of the License, or
    (at your option) any later version.
 
    This program is distributed in the hope that it will be useful,
@@ -15,8 +15,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
+   along with this program.  If not, see <http://www.gnu.org/licenses/>. */
 
 /* python includes */
 #define _SYS_UCONTEXT_H
@@ -204,7 +203,7 @@ static PyObject* code_new(PyObject* module, PyObject* args, PyObject* kwargs)
     static char *kwlist[] = {"input", "output", NULL};
     PyObject*input = NULL;
     PyObject*output = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO", kwlist, &input, &output)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OO", kwlist, &input, &output)) {
 	return NULL;
     }
 
@@ -396,9 +395,9 @@ static void add_instruction(CodeObject*code, insn*ins)
 PyObject * code_call(PyObject* _self, PyObject *args, PyObject *kwargs)
 {
     CodeObject*self = (CodeObject*)_self;
-    self->function();
+    int ret = self->function();
     Py_INCREF(Py_None);
-    return Py_None;
+    return pyint_fromlong(ret);
 }
 
 PyDoc_STRVAR(code_doc,
@@ -861,6 +860,7 @@ PyDoc_STRVAR(pynasm_doc,
 static PyMethodDef pynasm_methods[] =
 {
     {"function", (PyCFunction)code_new, M_FLAGS, code_new_doc},
+    {"assembler", (PyCFunction)code_new, M_FLAGS, code_new_doc},
     {"label", (PyCFunction)label_new, M_FLAGS, label_new_doc},
 
     /* sentinel */
