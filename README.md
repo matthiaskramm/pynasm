@@ -21,7 +21,6 @@ with assembler() as get_max_cores:
     pop(ebx)
     ret()
 
-print "maximum number of cores:", get_max_cores()
+print("maximum number of cores:", get_max_cores())
 ```
-
 
