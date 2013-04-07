@@ -54,6 +54,7 @@ typedef struct _state {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
 #define M_FLAGS (METH_VARARGS|METH_KEYWORDS)
 #define STATE(m) ((state_t*)PyModule_GetState(m))
+#define OB_TYPE(o) ((o)->ob_base.ob_type)
 #else
 #define PYTHON23_HEAD_INIT \
     PyObject_HEAD_INIT(NULL) \
@@ -61,6 +62,7 @@ typedef struct _state {
 #define M_FLAGS (METH_KEYWORDS)
 static state_t _python2_module_state = {0};
 #define STATE(m) (&_python2_module_state)
+#define OB_TYPE(o) ((o)->ob_type)
 #endif
 
 static PyTypeObject CodeClass;
@@ -294,10 +296,11 @@ static void code_add_data(CodeObject* self, const void*data, uint64_t length)
     PyByteArray_Resize(self->data, pos + length);
     memcpy(((PyByteArrayObject*)self->data)->ob_bytes + pos, data, length);
 #else
-    /* _PyStringObject_Resize assumes that the ref cnt of a string is 1,
-       but there's no easy way to initialize  an empty string that is
-       not interned (and the interned empty string has a very high ref
-       count), so we have to do things in a less efficient way */
+    /* _PyStringObject_Resize (which we would be using, in the optimal case)
+       assumes that the ref cnt of a string is 1, but there's no easy way 
+       to initialize an empty string that is not interned (and the interned 
+       empty string has a very high ref count), so we have to do things in 
+       a less efficient way */
     PyObject*append = PyString_FromStringAndSize(data, length);
     PyString_Concat(&self->data, append);
 #endif
@@ -328,7 +331,7 @@ static int code_emit_instructions(CodeObject*code)
     code->location.offset = 0;
     for(i=0;i<num;i++) {
         InstructionObject*instruction = (InstructionObject*)PyList_GET_ITEM(code->instructions, i);
-        if(instruction->ob_type != &InstructionClass) {
+        if(OB_TYPE(instruction) != &InstructionClass) {
             PY_ERROR("internal error: non-instructions in instruction stream");
             return -1;
         }

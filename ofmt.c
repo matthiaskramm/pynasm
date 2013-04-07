@@ -60,7 +60,7 @@ static void dummy_cleanup(int debuginfo)
 {
 }
 
-struct ofmt dummy_ofmt = {
+static struct ofmt dummy_ofmt = {
     "dummy",
     "dummy",
     0,
